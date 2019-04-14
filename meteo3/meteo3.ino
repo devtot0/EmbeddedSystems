@@ -7,11 +7,8 @@
 ******************************************************************/
 
 //libraries
-#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include "DHT.h"
-#include <SPI.h>
-#include <SoftwareSerial.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP280.h>
 
@@ -25,7 +22,7 @@ DHT dht(DHTPIN, DHTTYPE);
 #define BMP_MISO 12
 #define BMP_MOSI 11
 #define BMP_CS 10
-Adafruit_BMP280 bme(BMP_CS, BMP_MOSI, BMP_MISO, BMP_SCK); //using software SPI
+Adafruit_BMP280 bme(BMP_CS); // hardware SPI
 
 //LCD I2C - LiquidCrystal
 LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
@@ -48,19 +45,21 @@ const int SERIAL_PRINT_DELAY = 2000; //in miliseconds
 const int PRESSURE_CALIBRATION_DIFFERENCE = 26;
 
 bool printOnSerial = false;
+bool bluetoothEnabled = false;
 
 class Mode {
   private:
     String header; //e.g. "TEMPERATURE"
     String unitLCD; //e.g. "hPa"
     String unit;
+    char bluetoothMessageIdentifier;
     uint8_t decimalDigits; //float value can be converted to int if the decimal part is unnecessary
     uint8_t headerShift; //char count from the left of the screen by which the header will be shifted
     uint8_t valueShift; //char count from the left of the screen by which the value will be shifted
 
   public:
-    Mode(String header, String unitLCD, String unit, uint8_t decimalDigits, uint8_t headerShift, uint8_t valueShift)
-      : header(header), unitLCD(unitLCD), unit(unit), decimalDigits(decimalDigits), headerShift(headerShift), valueShift(valueShift) { }
+    Mode(String header, String unitLCD, String unit, char bluetoothMessageIdentifier, uint8_t decimalDigits, uint8_t headerShift, uint8_t valueShift)
+      : header(header), unitLCD(unitLCD), unit(unit), bluetoothMessageIdentifier(bluetoothMessageIdentifier), decimalDigits(decimalDigits), headerShift(headerShift), valueShift(valueShift) { }
 
     void displayDataOnScreen() {
       lcd.clear();
@@ -90,6 +89,12 @@ class Mode {
       //      Serial.println('*'); //ends the string display on the bt app
     }
 
+    inline void printDataToApp() {
+      Serial.print('*');
+      Serial.print(bluetoothMessageIdentifier);
+      Serial.print(getValue(), decimalDigits);
+      Serial.print('*');
+    }
     virtual inline float getValue() = 0;
 };
 
@@ -126,14 +131,20 @@ class PressureMode : public Mode {
 
 };
 
+enum modesIndexes {
+  temperatureIndex,
+  humidityIndex,
+  heatIndexIndex,
+  pressureIndex,
+  modesCount
+};
 
-const short MODES_COUNT = 3;
+Mode* temperature = new TemperatureMode("TEMPERATURE", String(String(DEGREE_SIGN) + "C"), "°C", 'T', 1, 2, 4);
+Mode* heatIndex = new HeatIndexMode("HEAT INDEX", String(String(DEGREE_SIGN) + "C"), "°C", 'I', 1, 3, 4);
+Mode* pressure = new PressureMode("PRESSURE", "hPa", "hPa", 'P', 0, 4, 4);
+Mode* humidity = new HumidityMode("HUMIDITY", "%", "%", 'H', 0, 4, 6);
 
-Mode* temperature = new TemperatureMode("TEMPERATURE", String(String(DEGREE_SIGN) + "C"), "°C", 1, 2, 4);
-Mode* heatIndex = new HeatIndexMode("HEAT INDEX", String(String(DEGREE_SIGN) + "C"), "°C", 1, 3, 4);
-Mode* pressure = new PressureMode("PRESSURE", "hPa", "hPa", 0, 4, 4);
-
-Mode* modes[MODES_COUNT] = {temperature, heatIndex, pressure};
+Mode* modes[modesCount] = {temperature, humidity, heatIndex, pressure};
 
 uint8_t currentModeIndex = 0;
 uint8_t oldModeIndex = 0;
@@ -143,7 +154,7 @@ uint8_t oldModeIndex = 0;
 
 //functions
 inline void nextMode() {
-  if (currentModeIndex == MODES_COUNT - 1) { //we are at the last mode, so we have to loop back to the beginning
+  if (currentModeIndex == modesCount - 1) { //we are at the last mode, so we have to loop back to the beginning
     currentModeIndex = 0;
   } else {
     currentModeIndex++;
@@ -152,7 +163,7 @@ inline void nextMode() {
 
 inline void previousMode() {
   if (currentModeIndex == 0) { //we are at the first mode, so we have to loop back to the end
-    currentModeIndex = MODES_COUNT - 1;
+    currentModeIndex = modesCount - 1;
   } else {
     currentModeIndex--;
   }
@@ -173,22 +184,28 @@ void buttonHandler()
 void serialInputHandler() {
   char incomingCharacter = Serial.read();
   switch (incomingCharacter) {
-    case 'n':
+    case 'n': //next mode
       nextMode();
       modes[currentModeIndex]->printDataOnSerial();
       break;
-    case 'p':
+    case 'p': //previous mode
       previousMode();
       modes[currentModeIndex]->printDataOnSerial();
       break;
-    case 'e':
+    case 'e': //enable repeated reading transmission on serial
       printOnSerial = true;
       break;
-    case 'd':
+    case 'd': //disable repeated reading transmission on serial
       printOnSerial = false;
       break;
-    case 'o':
+    case 'o': //get the current reading
       modes[currentModeIndex]->printDataOnSerial();
+      break;
+    case 'b':
+      bluetoothEnabled = true;
+      break;
+    case 'z':
+      bluetoothEnabled = false;
       break;
   }
 }
@@ -203,6 +220,18 @@ void printModeDataOnSerial() {
   }
 }
 
+void printModeDataOnBluetooth() {
+  static unsigned long last_interrupt_time = 0;
+  unsigned long interrupt_time = millis();
+  //if interrupts come faster than BOUNCE_TIME, assume it's a bounce and ignore
+  if (interrupt_time - last_interrupt_time > SERIAL_PRINT_DELAY) {
+    for(int i = 0; i < modesCount; ++i) {
+      modes[i]->printDataToApp();
+    }
+    last_interrupt_time = interrupt_time;
+  }
+}
+
 void setColor(uint8_t red, uint8_t green, uint8_t blue)
 {
   analogWrite(RED_RGB_PIN, 255 - red);
@@ -210,12 +239,11 @@ void setColor(uint8_t red, uint8_t green, uint8_t blue)
   analogWrite(BLUE_RGB_PIN, 255 - blue);
 }
 
-void humidityHandler() {
-  static HumidityMode h("HUMIDITY", "%", "%", 0, 2, 4);
-  if (h.getValue() < 30.0) {
+void humidityHandlerLED() {
+  if (modes[humidityIndex]->getValue() < 30.0) {
     setColor(0, 0, 255);
   }
-  else if (h.getValue() > 55.0) {
+  else if (modes[humidityIndex]->getValue() > 55.0) {
     setColor(255, 0, 0);
   }
   else {
@@ -255,6 +283,9 @@ void loop() {
   if (printOnSerial) {
     printModeDataOnSerial();
   }
-  humidityHandler();
+  if (bluetoothEnabled) {
+    printModeDataOnBluetooth();
+  }
+  humidityHandlerLED();
   delay(200); //don't try to redraw too often
 }
