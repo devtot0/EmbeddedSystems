@@ -1,9 +1,10 @@
 /******************************************************************
-  Created with PROGRAMINO IDE for Arduino - 06.04.2019 21:46:06
-  Project     :
-  Libraries   :
-  Author      :
-  Description :
+  Project     : Meteorological Station
+  Libraries   : DHT, LiquidCrystal I2C, Adafruit Sensor, Adafruit BMP280
+  Authors     : Piotr Kaźmierski (leader) 217847, Piotr Kocik, Kacper Kubicki, Michał Kuśmidrowicz
+  Group       : F9
+  Description : A meteorological station which could display the information relating to the weather conditions using an LCD
+                screen with the ability to change currently shown information via a button or remotely, via Bluetooth.
 ******************************************************************/
 
 //libraries
@@ -201,10 +202,10 @@ void serialInputHandler() {
     case 'o': //get the current reading
       modes[currentModeIndex]->printDataOnSerial();
       break;
-    case 'b':
+    case 'b': //enable continous sending of data via bluetooth
       bluetoothEnabled = true;
       break;
-    case 'z':
+    case 'z': //disable continous sending of data via bluetooth
       bluetoothEnabled = false;
       break;
   }
@@ -225,7 +226,7 @@ void printModeDataOnBluetooth() {
   unsigned long interrupt_time = millis();
   //if interrupts come faster than BOUNCE_TIME, assume it's a bounce and ignore
   if (interrupt_time - last_interrupt_time > SERIAL_PRINT_DELAY) {
-    for(int i = 0; i < modesCount; ++i) {
+    for (int i = 0; i < modesCount; ++i) {
       modes[i]->printDataToApp();
     }
     last_interrupt_time = interrupt_time;
